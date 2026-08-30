@@ -40,19 +40,29 @@ def run_simulation(model_path, ticker, start, end, out_trades='logs/trades.csv',
     df = load_data(ticker, start, end)
     env = TradingEnv(df)
 
-    # sync env cash/position from exchange
+    # initialize environment and then sync env cash/position from exchange
+    obs = env.reset()
     env.cash = ex.get_cash()
     env.position = ex.get_positions().get('DEFAULT', 0.0)
 
+    # ensure model file exists
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
     model = PPO.load(model_path, env=env)
 
-    obs = env.reset()
+    # get a fresh observation after setting cash/position
+    obs = env._get_obs()
+
     trades_since_tune = 0
     step = 0
 
     while True:
+        # model.predict expects the observation in the same shape used during training
         action, _ = model.predict(obs, deterministic=False)
-        prev_nav = env._nav(float(df.loc[env.current_step, 'Close']))
+        prev_price = float(df.loc[env.current_step, 'Close'])
+        prev_nav = env._nav(prev_price)
+
         obs2, reward, done, info = env.step(action)
         new_nav = info.get('nav', prev_nav)
 
@@ -60,7 +70,7 @@ def run_simulation(model_path, ticker, start, end, out_trades='logs/trades.csv',
         ex.state['cash'] = float(env.cash)
         ex.set_position(float(env.position), symbol='DEFAULT')
 
-        # if a trade occurred (position changed), log it
+        # log every step
         row = {
             'timestamp': pd.Timestamp.now().isoformat(),
             'step': step,
